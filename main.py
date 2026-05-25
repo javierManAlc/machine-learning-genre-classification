@@ -1,35 +1,51 @@
+# =====================================================================
+# 1. LIBRERÍAS Y CONFIGURACIÓN INICIAL
+# =====================================================================
 import sys
+import os
+import io
+import tempfile
 import types
-import joblib
-import xgboost as xgb
 
-# 1. Creamos un módulo falso completo
+# Hack de compatibilidad para versiones de librerías (pkg_resources)
 fake_pkg_resources = types.ModuleType("pkg_resources")
-
-# 2. Le damos una función que devuelva un número gigante para que siempre apruebe la versión
 def mock_parse_version(version_string):
-    return (99, 9, 9) 
+    return (99, 9, 9)
 fake_pkg_resources.parse_version = mock_parse_version
 sys.modules["pkg_resources"] = fake_pkg_resources
+
+# Datos, Web y Gráficos
 import streamlit as st
 import pandas as pd
 import numpy as np
-import librosa
 from scipy import stats
-import tempfile
-import os
-import tensorflow as tf
 import plotly.express as px
-from sklearn.manifold import MDS
-import tensorflow_hub as hub
+from PIL import Image
+import joblib
 
-# Cargar la lista oficial de columnas justo después de los imports
+# Audio y Machine Learning
+import librosa
+import librosa.display
+import matplotlib.pyplot as plt
+import tensorflow as tf
+import tensorflow_hub as hub
+import xgboost as xgb
+
+# Configuración de la página web
+st.set_page_config(page_title="Clasificador Musical FMA", page_icon="🎵", layout="wide")
+
+# Carga de archivos globales de configuración
 try:
     COLUMNAS_OFICIALES = joblib.load("columnas_oficiales.pkl")
 except FileNotFoundError:
     COLUMNAS_OFICIALES = None
 
-# Función auxiliar que obtiene las variables de una canción
+if 'seccion_activa' not in st.session_state:
+    st.session_state.seccion_activa = "ninguna"
+
+# =====================================================================
+# 2. FUNCIONES DE PROCESAMIENTO DE AUDIO
+# =====================================================================
 
 def calcular_estadisticas(caracteristica_matriz, nombre_caracteristica):
     """Calcula las 7 estadísticas del FMA para una matriz de audio de librosa."""
@@ -52,34 +68,19 @@ def calcular_estadisticas(caracteristica_matriz, nombre_caracteristica):
 
     return features_aplanadas
 
-@st.cache_resource(show_spinner="📊 Cargando modelos...")
-def cargar_modelo_tabular(nombre_archivo):
-    try:
-        return joblib.load(nombre_archivo)
-    except FileNotFoundError:
-        return None
-
 @st.cache_data(show_spinner="🎵 Analizando audio y extrayendo 518 variables...")
 def extraer_variables_cancion(uploaded_file, columnas_entrenamiento=None):
-    """
-    Lee un archivo de audio subido a Streamlit, extrae sus variables y las ordena.
-    """
-    # 1. TRUCO PARA STREAMLIT: Guardar el archivo en memoria a un archivo físico temporal
+    """Lee el audio, extrae sus variables y las ordena."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
         tmp_file.write(uploaded_file.getvalue())
         ruta_temporal = tmp_file.name
 
     try:
-        # 2. Cargar el audio usando la ruta temporal
         y, sr = librosa.load(ruta_temporal, sr=22050, mono=True, duration=30.0)
-
-        # Extraer características base
         stft = np.abs(librosa.stft(y))
         cqt = np.abs(librosa.cqt(y, sr=sr))
 
         dict_variables = {}
-
-        # Calcular todas las características (tu código original)
         dict_variables.update(calcular_estadisticas(librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20), 'mfcc'))
         dict_variables.update(calcular_estadisticas(librosa.feature.chroma_stft(S=stft, sr=sr), 'chroma_stft'))
         dict_variables.update(calcular_estadisticas(librosa.feature.chroma_cqt(C=cqt, sr=sr), 'chroma_cqt'))
@@ -92,71 +93,93 @@ def extraer_variables_cancion(uploaded_file, columnas_entrenamiento=None):
         dict_variables.update(calcular_estadisticas(librosa.feature.spectral_rolloff(S=stft, sr=sr), 'spectral_rolloff'))
         dict_variables.update(calcular_estadisticas(librosa.feature.zero_crossing_rate(y), 'zcr'))
 
-        # Convertir a DataFrame
         df_cancion = pd.DataFrame([dict_variables])
 
-        # 3. Reindexar (Solo si pasamos las columnas, útil para probar ahora mismo)
         if columnas_entrenamiento is not None:
             df_cancion = df_cancion.reindex(columns=columnas_entrenamiento, fill_value=0)
 
     finally:
-        # 4. LIMPIEZA: Borramos el archivo temporal para no llenar el disco duro
         if os.path.exists(ruta_temporal):
             os.remove(ruta_temporal)
 
     return df_cancion
 
-from PIL import Image
-import io
-import matplotlib.pyplot as plt
-import librosa.display
-
 @st.cache_data(show_spinner="🎨 Dibujando el espectrograma para la Red Neuronal...")
 def procesar_audio_para_dl(uploaded_file):
+    """Genera la imagen del espectrograma para la CNN."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
         tmp_file.write(uploaded_file.getvalue())
         ruta_temporal = tmp_file.name
 
     try:
-        # 1. Leer el audio
         y, sr = librosa.load(ruta_temporal, sr=22050, mono=True, duration=30.0)
-        
-        # 2. Calcular el Espectrograma de Mel (como hiciste en Colab para las imágenes)
         S = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=128)
         S_dB = librosa.power_to_db(S, ref=np.max)
         
-        # 3. Dibujar la imagen EXACTAMENTE a 256x128 sin bordes ni ejes
         fig = plt.figure(figsize=(2.56, 1.28), dpi=100) 
         ax = plt.Axes(fig, [0., 0., 1., 1.])
         ax.set_axis_off()
         fig.add_axes(ax)
         
-        # Asumo que en Colab los guardaste con los colores por defecto de librosa (viridis)
         librosa.display.specshow(S_dB, sr=sr, x_axis='time', y_axis='mel', ax=ax)
         
-        # 4. Guardar el dibujo en la memoria virtual (como una foto)
         buf = io.BytesIO()
         plt.savefig(buf, format='png')
         plt.close(fig)
         buf.seek(0)
         
-        # 5. Cargar la foto, asegurar el tamaño y convertirla a array para la IA
         img = Image.open(buf).convert('RGB')
-        img = img.resize((256, 128)) # Width=256, Height=128
-        img_array = np.array(img) # Forma: (128, 256, 3)
-        
-        # Keras espera un batch, así que añadimos dimensión extra: (1, 128, 256, 3)
+        img = img.resize((256, 128))
+        img_array = np.array(img)
         audio_input = np.expand_dims(img_array, axis=0)
 
     finally:
         if os.path.exists(ruta_temporal):
             os.remove(ruta_temporal)
 
-    return audio_input, img  # Devolvemos también la imagen para enseñarla en la web
+    return audio_input, img
+
+@st.cache_data(show_spinner="🎧 YAMNet está escuchando y extrayendo embeddings...")
+def procesar_audio_para_yamnet(uploaded_file):
+    """Extrae los 1024 embeddings usando el modelo base de Google YAMNet."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+        tmp_file.write(uploaded_file.getvalue())
+        ruta_temporal = tmp_file.name
+
+    try:
+        y, sr = librosa.load(ruta_temporal, sr=16000, mono=True, duration=30)
+        waveform = tf.convert_to_tensor(y, dtype=tf.float32)
+
+        yamnet_model = cargar_yamnet()
+        _, embeddings, _ = yamnet_model(waveform)
+
+        embedding_promedio = tf.reduce_mean(embeddings, axis=0).numpy()
+        input_final = np.expand_dims(embedding_promedio, axis=0)
+
+    finally:
+        if os.path.exists(ruta_temporal):
+            os.remove(ruta_temporal)
+
+    return input_final
+
+# =====================================================================
+# 3. FUNCIONES DE CARGA DE MODELOS (IA)
+# =====================================================================
+
+@st.cache_resource(show_spinner="📊 Cargando modelos tabulares...")
+def cargar_modelo_tabular(nombre_archivo):
+    """Carga modelos clásicos (XGBoost, SVM) y escaladores desde archivos .pkl."""
+    try:
+        import os
+        ruta_carpeta_actual = os.path.dirname(os.path.abspath(__file__))
+        ruta_modelo = os.path.join(ruta_carpeta_actual, nombre_archivo)
+        return joblib.load(ruta_modelo)
+    except FileNotFoundError:
+        return None     
 
 @st.cache_resource(show_spinner="🧠 Cargando tu Red Neuronal CNN...")
 def cargar_modelo_dl_puro():
-    # LA ARQUITECTURA EXACTA DE TU COLAB
+    """Reconstruye la CNN y carga los pesos para el análisis de espectrogramas."""
     modelo = tf.keras.models.Sequential([
         tf.keras.layers.Rescaling(1./255, input_shape=(128, 256, 3)),
         tf.keras.layers.Conv2D(16, 3, padding='same', activation='relu'),
@@ -168,31 +191,27 @@ def cargar_modelo_dl_puro():
         tf.keras.layers.Flatten(),
         tf.keras.layers.Dense(128, activation='relu'),
         tf.keras.layers.Dropout(0.5),
-        tf.keras.layers.Dense(8, activation='softmax') # 8 géneros
+        tf.keras.layers.Dense(8, activation='softmax')
     ])
     
     try:
         import os
-        # 1. Averiguamos la ruta exacta donde está guardado tu main.py
         ruta_carpeta_actual = os.path.dirname(os.path.abspath(__file__))
-        # 2. Le pegamos el nombre de tu archivo de pesos
         ruta_pesos = os.path.join(ruta_carpeta_actual, "pesos_cnn_espectrogramas.weights.h5")
-        
-        # 3. Cargamos usando la ruta a prueba de fallos
         modelo.load_weights(ruta_pesos) 
         return modelo
     except Exception as e:
-        st.error(f"Error al cargar los pesos: {e}")
+        st.error(f"Error al cargar los pesos de la CNN: {e}")
         return None
 
 @st.cache_resource(show_spinner="🌐 Cargando YAMNet de Google...")
 def cargar_yamnet():
-    # Descarga el modelo base de Google (se guarda en caché automáticamente)
+    """Descarga o carga de la caché el modelo base YAMNet de Google."""
     return hub.load('https://tfhub.dev/google/yamnet/1')
 
-@st.cache_resource(show_spinner="🧠 Cargando tu Clasificador Final...")
+@st.cache_resource(show_spinner="🧠 Cargando tu Clasificador Final de YAMNet...")
 def cargar_mi_modelo_tl():
-    # 1. Construimos el "esqueleto" exacto que usaste en Colab
+    """Reconstruye las capas densas finales y carga los pesos para Transfer Learning."""
     modelo = tf.keras.models.Sequential([
         tf.keras.layers.Dense(512, activation='relu', input_shape=(1024,)),
         tf.keras.layers.Dropout(0.5),
@@ -201,81 +220,56 @@ def cargar_mi_modelo_tl():
         tf.keras.layers.Dense(8, activation='softmax')
     ])
     
-    # 2. Le inyectamos el "cerebro" (¡Acuérdate del nuevo nombre!)
-    modelo.load_weights("pesos_yamnet.weights.h5") 
-    
-    return modelo
-
-# --- 2. EXTRAER EL EMBEDDING DEL AUDIO ---
-
-@st.cache_data(show_spinner="🎧 YAMNet está escuchando y extrayendo embeddings...")
-def procesar_audio_para_yamnet(uploaded_file):
-    import tempfile
-    import os
-    import librosa
-    import numpy as np
-
-    # Guardar archivo temporal
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
-        tmp_file.write(uploaded_file.getvalue())
-        ruta_temporal = tmp_file.name
-
     try:
-        # YAMNet exige estrictamente audio a 16000 Hz, mono
-        y, sr = librosa.load(ruta_temporal, sr=16000, mono=True, duration=30)
-        waveform = tf.convert_to_tensor(y, dtype=tf.float32)
+        import os
+        ruta_carpeta_actual = os.path.dirname(os.path.abspath(__file__))
+        ruta_pesos = os.path.join(ruta_carpeta_actual, "pesos_yamnet.weights.h5")
+        modelo.load_weights(ruta_pesos) 
+        return modelo
+    except Exception as e:
+        st.error(f"Error al cargar los pesos de YAMNet: {e}")
+        return None
+    
+@st.cache_data
+def cargar_stats_radar():
+    """Carga las medias precalculadas de Echo Nest para el gráfico de radar."""
+    try:
+        return pd.read_csv("stats_radar_generos.csv", index_col=0)
+    except FileNotFoundError:
+        return None
+# =====================================================================
+# 4. INTERFAZ DE USUARIO Y CARGA DE CANCIÓN
+# =====================================================================
 
-        # Cargar YAMNet y pasar el audio
-        yamnet_model = cargar_yamnet()
-        _, embeddings, _ = yamnet_model(waveform)
+st.title("🎵 Clasificador de Géneros Musicales 🎵")
+st.markdown("""
+Esta aplicación utiliza Inteligencia Artificial para analizar tus archivos de audio y clasificarlos en uno de los 8 géneros 
+del dataset FMA Small. Puedes comparar los resultados de modelos clásicos, visión por computador y transferencia de aprendizaje.
+""")
 
-        # Promediar para obtener 1 vector de 1024
-        embedding_promedio = tf.reduce_mean(embeddings, axis=0).numpy()
-        
-        # Keras espera un batch, así que añadimos la dimensión extra: shape (1, 1024)
-        input_final = np.expand_dims(embedding_promedio, axis=0)
-
-    finally:
-        if os.path.exists(ruta_temporal):
-            os.remove(ruta_temporal)
-
-    return input_final
-
-
-# 1. Configuración de la página
-st.set_page_config(page_title="Clasificador Musical FMA", layout="wide")
-
-st.title("🎵 Clasificador de Géneros Musicales - FMA Small")
-st.markdown("Sube una canción y analiza a qué género pertenece usando distintos modelos de Machine Learning.")
-
-# 2. Zona para arrastrar la canción
+# Zona de carga de archivos
 uploaded_file = st.file_uploader("Arrastra tu canción aquí (.mp3, .wav)", type=['mp3', 'wav'])
 
 if uploaded_file is not None:
+    # Reproductor de audio
     st.audio(uploaded_file)
     
-    # Llamamos a nuestra nueva función adaptada. 
-    # NOTA: Por ahora no le pasamos 'columnas_entrenamiento' para ver que funciona la extracción cruda.
-    df_features = extraer_variables_cancion(uploaded_file)
+    # Extraemos las variables para los modelos tabulares (XGBoost/SVM)
+    df_features = extraer_variables_cancion(uploaded_file, columnas_entrenamiento=COLUMNAS_OFICIALES)
     
-    st.success("¡Canción procesada con éxito!")
+    st.success("✅ ¡Canción analizada y procesada correctamente!")
     
-    # Mostramos los resultados en un formato "expansible" para que no ocupe toda la pantalla
-    with st.expander("Ver variables extraídas"):
-        st.write(f"Se extrajeron {df_features.shape[1]} variables:")
+    # Mostramos los datos extraídos en un desplegable
+    with st.expander("📊 Ver variables extraídas (Features)"):
+        st.write(f"Se han extraído {df_features.shape[1]} variables técnicas.")
         st.dataframe(df_features)
 
-    # 3. Inicializar el estado de la sesión para los botones
-    if 'seccion_activa' not in st.session_state:
-        st.session_state.seccion_activa = "ninguna"
-
-    # Funciones para cambiar el estado al pulsar los botones
+    # Función para cambiar de sección
     def set_seccion(nombre_seccion):
         st.session_state.seccion_activa = nombre_seccion
 
-    # 4. Barra de botones horizontales
+    # Barra de navegación con botones horizontales
     col1, col2, col3, col4 = st.columns(4)
-    
     with col1:
         st.button("📊 Modelos Tabulares", on_click=set_seccion, args=("tabular",), use_container_width=True)
     with col2:
@@ -287,178 +281,196 @@ if uploaded_file is not None:
 
     st.divider()
 
-    # 5. Lógica de visualización según el botón presionado
-    if st.session_state.seccion_activa == "dl":
-        st.subheader("🧠 Resultados - Deep Learning (CNN Visión Espacial)")
-        
-        modelo_dl = cargar_modelo_dl_puro()
-        
-        if modelo_dl is not None:
-            # 1. Generar la imagen y prepararla
-            tensor_imagen, imagen_visual = procesar_audio_para_dl(uploaded_file)
-            
-            # 2. Mostramos al usuario lo que ve la IA (¡esto queda chulísimo en las demos!)
-            with st.expander("👁️ Ver lo que está analizando la Red Neuronal", expanded=True):
-                st.image(imagen_visual, caption="Espectrograma 128x256 analizado por la CNN", use_container_width=True)
-            
-            # 3. Predicción
-            with st.spinner("Las capas convolucionales están buscando patrones..."):
-                probas = modelo_dl.predict(tensor_imagen)
-            
-            # 4. Asegúrate de que el orden sea el mismo que generó el validation_dataset en tu Colab
-            # Suele ser orden alfabético al leer de carpetas
-            nombres_clases_dl = ['Electronic', 'Experimental', 'Folk', 'Hip-Hop', 'Instrumental', 'International', 'Pop', 'Rock']
-            
-            indice_predicho = np.argmax(probas[0])
-            genero_predicho = nombres_clases_dl[indice_predicho]
-            
-            st.markdown(f"### Género Predicho: <span style='color:#E91E63'>**{genero_predicho.upper()}**</span>", unsafe_allow_html=True)
-            
-            # 5. Gráfico de barras
-            df_probas_dl = pd.DataFrame({'Género': nombres_clases_dl, 'Probabilidad': probas[0]})
-            df_probas_dl = df_probas_dl.sort_values(by='Probabilidad', ascending=True)
-            
-            fig_dl = px.bar(df_probas_dl, x='Probabilidad', y='Género', orientation='h', 
-                            color='Probabilidad', color_continuous_scale='Purples')
-            fig_dl.update_layout(xaxis=dict(tickformat=".1%"))
-            st.plotly_chart(fig_dl, use_container_width=True)
-        
-    elif st.session_state.seccion_activa == "tabular":
-        st.subheader("📊 Comparativa de Modelos Tabulares")
-        
-        mis_modelos = [
-            {"nombre": "XGBoost", "modelo": "modelo_xgboost.pkl", "scaler": None},
-            {"nombre": "SVM", "modelo": "modelo_svm.pkl", "scaler": "escalador_svm.pkl"}
-        ]
-        
-        generos_tabular = ['Electronic', 'Experimental', 'Folk', 'Hip-Hop', 'Instrumental', 'International', 'Pop', 'Rock']
+# =====================================================================
+# 5. LÓGICA DE LAS SECCIONES (PREDICCIONES Y GRÁFICOS)
+# =====================================================================
 
-        for config in mis_modelos:
-            modelo_tab = cargar_modelo_tabular(config["modelo"])
-            
-            # Cargamos el escalador solo si el modelo lo necesita
-            scaler_tab = None
-            if config["scaler"] is not None:
-                scaler_tab = cargar_modelo_tabular(config["scaler"])
-            
-            if modelo_tab is not None:
-                with st.expander(f"📌 Modelo: {config['nombre']}", expanded=True):
-                    
-                    # 1. ¿Quién tiene los nombres de las columnas? El escalador (si existe), si no, el modelo.
-                    objeto_referencia = scaler_tab if scaler_tab is not None else modelo_tab
-                    
-                    # --- NUEVO: ORDENAR LAS COLUMNAS A LA FUERZA CON LA LISTA DE COLAB ---
-                    if COLUMNAS_OFICIALES is not None:
-                        df_features_modelo = df_features.reindex(columns=COLUMNAS_OFICIALES, fill_value=0)
-                    else:
-                        try:
-                            columnas_entrenamiento = objeto_referencia.feature_names_in_
-                            df_features_modelo = df_features.reindex(columns=columnas_entrenamiento, fill_value=0)
-                        except AttributeError:
-                            # Si ninguno tiene los nombres guardados, usamos las extraídas tal cual
-                            df_features_modelo = df_features
-                    # ---------------------------------------------------------------------
-                    
-                    # 2. EL PASO CLAVE: Escalar los datos si hay un scaler cargado
-                    if scaler_tab is not None:
-                        # Transformamos los datos y los guardamos en X_input
-                        X_input = scaler_tab.transform(df_features_modelo)
-                        st.caption("*(✅ Datos escalados correctamente)*")
-                    else:
-                        X_input = df_features_modelo
-                    
-                    # --- EL NUEVO BLOQUE ESPÍA ---
-                    with st.expander("🕵️ Comparador de Columnas (El detector de mentiras)"):
-                        st.write("Sumatoria de los datos ANTES de escalar (si es 0, todo está mal):")
-                        st.write(np.sum(df_features_modelo.values))
-                        
-                        st.write("🧐 Primeras 5 columnas según COLAB:")
-                        st.write(COLUMNAS_OFICIALES[:5] if COLUMNAS_OFICIALES else "🚨 El archivo pkl no cargó")
-                        
-                        st.write("🧐 Primeras 5 columnas según STREAMLIT:")
-                        st.write(list(df_features.columns)[:5])
-                    # ----------------------------------------------------
-                    
-                    # 3. Predicción
-                    pred = modelo_tab.predict(X_input)
-                    genero_p = pred[0]
-                    
-                    if isinstance(genero_p, (int, np.integer)):
-                        genero_p = generos_tabular[genero_p]
-                    
-                    st.markdown(f"**Predicción:** `{genero_p.upper()}`")
-                    
-                    # 4. Gráfico de probabilidad
-                    if hasattr(modelo_tab, "predict_proba"):
-                        probas = modelo_tab.predict_proba(X_input)[0]
-                        clases = modelo_tab.classes_ if hasattr(modelo_tab, "classes_") else generos_tabular
-                        
-                        df_p = pd.DataFrame({'G': clases, 'P': probas}).sort_values(by='P', ascending=True)
-                        
-                        fig = px.bar(df_p, x='P', y='G', orientation='h', height=250,
-                                     color='P', color_continuous_scale='Greens',
-                                     labels={'P':'Confianza', 'G':'Género'})
-                        fig.update_layout(showlegend=False, margin=dict(l=20, r=20, t=20, b=20))
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.info("Este modelo no devuelve probabilidades exactas (normal en los SVM clásicos).")
-    elif st.session_state.seccion_activa == "tl":
-        st.subheader("🚀 Resultados - Transfer Learning (YAMNet)")
-        
-        modelo_tl = cargar_mi_modelo_tl()
-        
-        if modelo_tl is not None:
-            # 1. Obtener los 1024 embeddings de la canción subida
-            embeddings_cancion = procesar_audio_para_yamnet(uploaded_file)
-            
-            # 2. Hacer la predicción con tu modelo
-            probas = modelo_tl.predict(embeddings_cancion)
-            
-            generos = ['Hip-Hop', 'Pop', 'Folk', 'Experimental', 'Rock', 'International', 'Electronic', 'Instrumental']
-            
-            indice_predicho = np.argmax(probas[0])
-            genero_predicho = generos[indice_predicho]
-            
-            st.markdown(f"### Género Predicho: <span style='color:#FF5722'>**{genero_predicho.upper()}**</span>", unsafe_allow_html=True)
-            
-            # 3. Gráfico
-            st.write("**Confianza (YAMNet + Capas Densas):**")
-            df_probas_tl = pd.DataFrame({'Género': generos, 'Probabilidad': probas[0]})
-            df_probas_tl = df_probas_tl.sort_values(by='Probabilidad', ascending=True)
-            
-            import plotly.express as px
-            fig_probas = px.bar(df_probas_tl, x='Probabilidad', y='Género', orientation='h', 
-                                color='Probabilidad', color_continuous_scale='Oranges')
-            fig_probas.update_layout(xaxis=dict(tickformat=".1%"))
-            st.plotly_chart(fig_probas, use_container_width=True)
+# Lista maestra de géneros (FMA Small oficial)
+GENEROS_OFICIALES = ['Electronic', 'Experimental', 'Folk', 'Hip-Hop', 'Instrumental', 'International', 'Pop', 'Rock']
 
-    elif st.session_state.seccion_activa == "mapa":
-        st.subheader("Mapa Espacial de Géneros (MDS)")
-        st.write("Reducción de dimensionalidad mostrando la canción respecto a los centroides de los géneros.")
+# --- SECCIÓN A: DEEP LEARNING (CNN) ---
+if st.session_state.seccion_activa == "dl":
+    st.subheader("🧠 Deep Learning - Clasificación por Espectrograma")
+    modelo_dl = cargar_modelo_dl_puro()
+    
+    if modelo_dl is not None:
+        tensor_imagen, imagen_visual = procesar_audio_para_dl(uploaded_file)
         
-        # --- SIMULACIÓN DEL GRÁFICO MDS CON PLOTLY ---
-        # 1. Simular centroides de 8 géneros del fma_small (ej: 2 componentes principales o variables)
-        generos = ['Electronic', 'Experimental', 'Folk', 'Hip-Hop', 'Instrumental', 'International', 'Pop', 'Rock']
-        datos_mds = np.random.rand(8, 2) * 10 
+        with st.expander("👁️ Ver análisis de la Red Neuronal", expanded=True):
+            st.image(imagen_visual, caption="Espectrograma analizado (Frecuencia vs Tiempo)", use_container_width=True)
         
-        df_mapa = pd.DataFrame(datos_mds, columns=['MDS1', 'MDS2'])
-        df_mapa['Género'] = generos
-        df_mapa['Tipo'] = 'Centroide'
-        df_mapa['Tamaño'] = 10
+        probas = modelo_dl.predict(tensor_imagen)
+        indice_p = np.argmax(probas[0])
+        genero_p = GENEROS_OFICIALES[indice_p]
         
-        # 2. Simular los datos de la canción subida tras pasar por tu función MDS
-        cancion_mds = pd.DataFrame({'MDS1': [5], 'MDS2': [5], 'Género': ['Tu Canción'], 'Tipo': ['Tu Canción'], 'Tamaño': [20]})
+        st.markdown(f"### Género Predicho: <span style='color:#E91E63'>**{genero_p.upper()}**</span>", unsafe_allow_html=True)
         
-        # 3. Unir datos y graficar
-        df_final = pd.concat([df_mapa, cancion_mds], ignore_index=True)
-        
-        fig = px.scatter(
-            df_final, x='MDS1', y='MDS2', color='Género', symbol='Tipo',
-            size='Tamaño', hover_name='Género',
-            title="Proyección MDS: Tu Canción vs Centroides FMA",
-            template="plotly_dark"
-        )
-        # Hacer que la canción destaque visualmente
-        fig.update_traces(marker=dict(line=dict(width=2, color='DarkSlateGrey')))
-        
+        df_p = pd.DataFrame({'Género': GENEROS_OFICIALES, 'Confianza': probas[0]}).sort_values('Confianza')
+        fig = px.bar(df_p, x='Confianza', y='Género', orientation='h', color='Confianza', color_continuous_scale='Purples')
         st.plotly_chart(fig, use_container_width=True)
+
+# --- SECCIÓN B: MODELOS TABULARES (XGB/SVM) ---
+elif st.session_state.seccion_activa == "tabular":
+    st.subheader("📊 Comparativa de Modelos Clásicos")
+    
+    configs = [
+        {"nombre": "XGBoost", "modelo": "modelo_xgboost.pkl", "scaler": None},
+        {"nombre": "SVM", "modelo": "modelo_svm.pkl", "scaler": "escalador_svm.pkl"}
+    ]
+
+    for conf in configs:
+        mod = cargar_modelo_tabular(conf["modelo"])
+        sc = cargar_modelo_tabular(conf["scaler"]) if conf["scaler"] else None
+        
+        if mod is not None:
+            with st.expander(f"📌 Resultado: {conf['nombre']}", expanded=True):
+                # Preparar entrada (Escalar si es necesario)
+                X_input = sc.transform(df_features) if sc else df_features
+                
+                # 🌟 EL BLINDAJE PARA DAGSTER 🌟
+                # Si X_input sigue siendo un DataFrame (como pasa con XGBoost), 
+                # le quitamos los nombres de texto y dejamos solo los números.
+                if isinstance(X_input, pd.DataFrame):
+                    X_input = X_input.values
+                
+                # Ahora la predicción es segura para todos los modelos
+                pred = mod.predict(X_input)
+                
+                # Manejar si devuelve el índice o el nombre directamente
+                gen_final = GENEROS_OFICIALES[pred[0]] if isinstance(pred[0], (int, np.integer)) else pred[0]
+                
+                st.markdown(f"**Predicción:** `{gen_final.upper()}`")
+                
+                # La gráfica de probabilidades también usará el X_input limpio
+                if hasattr(mod, "predict_proba"):
+                    probs = mod.predict_proba(X_input)[0]
+                    df_p = pd.DataFrame({'G': GENEROS_OFICIALES, 'P': probs}).sort_values('P')
+                    fig = px.bar(df_p, x='P', y='G', orientation='h', height=250, color='P', color_continuous_scale='Greens')
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Este modelo no proporciona probabilidades de confianza.")
+# --- SECCIÓN C: TRANSFER LEARNING (YAMNet) ---
+elif st.session_state.seccion_activa == "tl":
+    st.subheader("🚀 Transfer Learning - Embeddings de YAMNet")
+    modelo_tl = cargar_mi_modelo_tl()
+    
+    if modelo_tl is not None:
+        emb = procesar_audio_para_yamnet(uploaded_file)
+        probas = modelo_tl.predict(emb)
+        
+        # Nota: Ajusta este orden si tu modelo de YAMNet se entrenó con etiquetas en otro orden
+        gen_yamnet = ['Hip-Hop', 'Pop', 'Folk', 'Experimental', 'Rock', 'International', 'Electronic', 'Instrumental']
+        
+        indice_p = np.argmax(probas[0])
+        st.markdown(f"### Género Predicho: <span style='color:#FF5722'>**{gen_yamnet[indice_p].upper()}**</span>", unsafe_allow_html=True)
+        
+        df_p = pd.DataFrame({'Género': gen_yamnet, 'Confianza': probas[0]}).sort_values('Confianza')
+        fig = px.bar(df_p, x='Confianza', y='Género', orientation='h', color='Confianza', color_continuous_scale='Oranges')
+        st.plotly_chart(fig, use_container_width=True)
+
+# --- SECCIÓN D: MAPA DE GÉNEROS Y COMPARADOR DE ADN ---
+elif st.session_state.seccion_activa == "mapa":
+    st.subheader("🗺️ Mapa Acústico Real (MDS)")
+    st.write("Ubicación de tu canción en el espacio latente de las 518 variables originales.")
+
+    try:
+        # 1. Cargar los promedios de los géneros que sacamos de Colab
+        df_centroides = pd.read_csv("centroides_fma.csv", index_col=0)
+        
+        # 2. Preparar los datos: 8 géneros + 1 canción actual
+        # Aseguramos que la canción tenga el mismo orden de columnas
+        cancion_para_mapa = df_features[df_centroides.columns]
+        
+        # Unimos todo en una sola tabla de 9 filas
+        tabla_mds = pd.concat([df_centroides, cancion_para_mapa], ignore_index=False)
+        
+        # 3. ESCALADO (Vital para MDS)
+        from sklearn.preprocessing import StandardScaler
+        scaler_mds = StandardScaler()
+        datos_escalados = scaler_mds.fit_transform(tabla_mds)
+        
+        # 4. CÁLCULO MDS (De 518 dimensiones a 2)
+        from sklearn.manifold import MDS
+        with st.spinner("Proyectando dimensiones..."):
+            mds = MDS(n_components=2, random_state=42, dissimilarity='euclidean')
+            coordenadas = mds.fit_transform(datos_escalados)
+        
+        # 5. CREAR DATAFRAME PARA EL GRÁFICO
+        df_plot = pd.DataFrame(coordenadas, columns=['Dim 1', 'Dim 2'])
+        # Los nombres son los 8 géneros + "TU CANCIÓN"
+        df_plot['Etiqueta'] = list(df_centroides.index) + ["⭐ TU CANCIÓN"]
+        df_plot['Color'] = df_plot['Etiqueta']
+        # Tamaño: Que la canción destaque
+        df_plot['Tamaño'] = [10]*8 + [25]
+        
+        # 6. DIBUJAR CON PLOTLY
+        fig_mapa = px.scatter(
+            df_plot, x='Dim 1', y='Dim 2',
+            color='Color',
+            text='Etiqueta',
+            size='Tamaño',
+            size_max=30,
+            template="plotly_dark",
+            title="Proximidad Acústica: Tu canción vs Géneros FMA"
+        )
+        
+        fig_mapa.update_traces(textposition='top center')
+        fig_mapa.update_layout(showlegend=False, height=600)
+        
+        st.plotly_chart(fig_mapa, use_container_width=True)
+        st.info("💡 Los puntos cercanos indican que las canciones comparten texturas, ritmos y timbres similares.")
+
+    except FileNotFoundError:
+        st.error("Falta el archivo 'centroides_fma.csv'. Genéralo en Colab con el nuevo script.")
+        
+    # 2. Parte inferior: El Comparador ADN con dos selectores
+    st.write("**🧬 Comparador Directo de ADN Musical (Echo Nest)**")
+    df_radar_all = cargar_stats_radar()
+    
+    if df_radar_all is not None:
+        # Creamos dos columnas para los selectores
+        sel1, sel2 = st.columns(2)
+        
+        with sel1:
+            gen1 = st.selectbox("Selecciona el primer género:", GENEROS_OFICIALES, index=6) # Por defecto Pop
+        with sel2:
+            gen2 = st.selectbox("Selecciona el segundo género:", GENEROS_OFICIALES, index=2) # Por defecto Folk
+
+        # Variables a mostrar
+        features_radar = ['acousticness', 'danceability', 'energy', 'instrumentalness', 'liveness', 'speechiness']
+        
+        import plotly.graph_objects as go
+        fig_radar = go.Figure()
+
+        # Traza para el Género 1
+        fig_radar.add_trace(go.Scatterpolar(
+            r=df_radar_all.loc[gen1, features_radar].values,
+            theta=features_radar,
+            fill='toself',
+            name=f"ADN {gen1}",
+            line_color='#1f77b4' # Azul
+        ))
+
+        # Traza para el Género 2
+        fig_radar.add_trace(go.Scatterpolar(
+            r=df_radar_all.loc[gen2, features_radar].values,
+            theta=features_radar,
+            fill='toself',
+            name=f"ADN {gen2}",
+            line_color='#ff7f0e' # Naranja
+        ))
+
+        fig_radar.update_layout(
+            polar=dict(
+                radialaxis=dict(visible=True, range=[0, 1], gridcolor="gray"),
+                angularaxis=dict(gridcolor="gray")
+            ),
+            showlegend=True,
+            template="plotly_dark",
+            height=500,
+            margin=dict(l=80, r=80, t=40, b=40)
+        )
+        
+        st.plotly_chart(fig_radar, use_container_width=True)
+    else:
+        st.warning("⚠️ No se encontró el archivo 'stats_radar_generos.csv'.")
