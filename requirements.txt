@@ -1,0 +1,13 @@
+streamlit
+pandas
+numpy
+scipy
+plotly
+Pillow
+joblib
+librosa
+matplotlib
+tensorflow
+tensorflow-hub
+xgboost
+scikit-learn
