@@ -27,8 +27,8 @@ import joblib
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
-import tensorflow as tf
-import tensorflow_hub as hub
+# import tensorflow as tf
+# import tensorflow_hub as hub
 import xgboost as xgb
 
 # Configuración de la página web
@@ -251,6 +251,8 @@ del dataset FMA Small. Puedes comparar los resultados de modelos clásicos, visi
 uploaded_file = st.file_uploader("Arrastra tu canción aquí (.mp3, .wav)", type=['mp3', 'wav'])
 
 if uploaded_file is not None:
+    import tensorflow as tf 
+    import tensorflow_hub as hub
     # Reproductor de audio
     st.audio(uploaded_file)
     
