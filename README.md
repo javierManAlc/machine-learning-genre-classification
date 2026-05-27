@@ -189,6 +189,30 @@ La aplicación es interactiva porque permite al usuario:
 
 ---
 
+## Implementación en Dagster
+
+El modelo XGboost tiene una mayor capacidad de adaptación a nuevos datos.
+
+En Dagter existe implementado un esquema temporal que permite:
+
+- lectura de datos disponibles
+- entrenamiento del modelo
+- decisión de hiperparémetros mediante validación cruzada
+- actualizar los parámetros del modelo
+- obtener métricas de rendimiento del modelo
+- medir importancia de cada una de las variables
+
+Este esquema temporal está programado para realizar estas tareas el 24 de cada mes.
+
+---
+
+## Uso de Dask
+
+Con el objetivo de realizar un entrenamiento más eficiente en Dagster se ha usado Dask en la
+paralelización de tareas de entrenamiento del modelo mediante validación cruzada y la carga de datos.
+
+---
+
 ## Estructura del proyecto
 
 text
@@ -287,8 +311,6 @@ streamlit run main.py
 
 Una vez ejecutado el comando, Streamlit abrirá la aplicación en el navegador.
 
-También es accesible a través del siguiente enlace: https://machine-learning-genre-classification-odfyakyz9rrp3qt3dpvnue.streamlit.app/
-
 ---
 
 ## Uso de la aplicación
@@ -312,9 +334,7 @@ El funcionamiento básico de la aplicación es el siguiente:
 
 La aplicación está disponible en el siguiente enlace:
 
-text
-
-
+https://machine-learning-genre-classification-jnxvtqqvbivd3njjjn6q5i.streamlit.app/
 
 ---
 

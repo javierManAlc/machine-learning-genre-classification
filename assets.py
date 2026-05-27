@@ -67,7 +67,6 @@ def entrenar_xgboost(preparar_datos_fma):
     
     cliente = Client(processes=False) 
     
-    # Le decimos a Scikit-Learn que use el motor de Dask para entrenar todo a la vez
     with joblib.parallel_backend('dask'):
         buscador.fit(X_train, y_train)
         
