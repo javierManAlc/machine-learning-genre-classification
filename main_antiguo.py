@@ -758,16 +758,19 @@ elif st.session_state.seccion_activa == "mapa":
             fillcolor='rgba(6,182,212,0.12)',
         ))
         fig_radar.update_layout(
-            polar=dict(
-                bgcolor='rgba(0,0,0,0)',
-                radialaxis=dict(visible=True, range=[0, 1], gridcolor='rgba(255,255,255,0.08)', color='#8b8ba7'),
-                angularaxis=dict(gridcolor='rgba(255,255,255,0.08)', color='#8b8ba7'),
+        polar=dict(
+            bgcolor='rgba(0,0,0,0)',
+            radialaxis=dict(visible=True, range=[0, 1], gridcolor='rgba(255,255,255,0.08)', color='#8b8ba7'),
+            angularaxis=dict(gridcolor='rgba(255,255,255,0.08)', color='#8b8ba7'),
             ),
-            showlegend=True,
-            legend=dict(font=dict(color='#f0eeff')),
-            height=480,
-            margin=dict(l=80, r=80, t=40, b=40),
-            **PLOTLY_LAYOUT,
+        showlegend=True,
+        legend=dict(font=dict(color='#f0eeff')),
+        height=480,
+        margin=dict(l=80, r=80, t=40, b=40),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(family='DM Sans', color='#f0eeff'),
+        template="plotly_dark",
         )
         st.plotly_chart(fig_radar, use_container_width=True)
     else:
