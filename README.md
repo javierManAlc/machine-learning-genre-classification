@@ -287,6 +287,8 @@ streamlit run main.py
 
 Una vez ejecutado el comando, Streamlit abrirá la aplicación en el navegador.
 
+También es accesible a través del siguiente enlace: https://machine-learning-genre-classification-odfyakyz9rrp3qt3dpvnue.streamlit.app/
+
 ---
 
 ## Uso de la aplicación
