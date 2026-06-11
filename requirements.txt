@@ -11,3 +11,4 @@ tensorflow
 tensorflow-hub
 xgboost
 scikit-learn
+rpy2
