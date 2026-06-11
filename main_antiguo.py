@@ -406,19 +406,23 @@ def mostrar_tarta_generos_ggplot(data_plot):
     data_plot["count"] = pd.to_numeric(data_plot["count"], errors="coerce")
     data_plot = data_plot.dropna()
 
-    # 🌟 FIX PARA LOS HILOS DE STREAMLIT 🌟
-    # En lugar de usar localconverter, activamos la conversión explícitamente 
-    # para asegurarnos de que el hilo actual de Streamlit tenga el contexto.
-    from rpy2.robjects import pandas2ri
-    pandas2ri.activate()
+    # 🌟 FIX DEFINITIVO PARA RPY2 MODERNO EN STREAMLIT 🌟
+    # Usamos la conversión directa e instanciada para evitar problemas de contexto y deprecación.
+    from rpy2.robjects import pandas2ri, conversion, globalenv
 
-    # Al estar activado, podemos pasar el dataframe directamente al entorno de R
-    ro.globalenv["data_plot"] = data_plot
+    # 1. Creamos un conversor combinando las reglas base con las de Pandas
+    conversor_pandas = conversion.get_conversion() + pandas2ri.converter
+
+    # 2. Convertimos explícitamente el DataFrame usando ese conversor
+    data_plot_r = conversor_pandas.py2rpy(data_plot)
+
+    # 3. Lo inyectamos en el entorno global de R
+    globalenv["data_plot"] = data_plot_r
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
         ruta_grafico = tmp.name
 
-    ro.globalenv["ruta_grafico"] = ruta_grafico.replace("\\", "/")
+    globalenv["ruta_grafico"] = ruta_grafico.replace("\\", "/")
 
     ro.r("""
     library(ggplot2)
