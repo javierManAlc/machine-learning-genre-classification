@@ -374,7 +374,8 @@ def make_unique(cols):
 @st.cache_data
 def cargar_data_plot_generos():
     """
-    Carga el archivo personalizado objetivo.csv y cuenta las canciones por género.
+    Carga el archivo objetivo.csv (que tiene una sola columna sin cabecera) 
+    y cuenta las canciones por género.
     """
     import os
     import pandas as pd
@@ -382,25 +383,19 @@ def cargar_data_plot_generos():
     ruta_carpeta_actual = os.path.dirname(os.path.abspath(__file__))
     ruta_tracks = os.path.join(ruta_carpeta_actual, "objetivo.csv")
 
-    # 1. Cargamos el CSV como un archivo normal (sin header=[0,1])
-    df = pd.read_csv(ruta_tracks)
+    # 1. Cargamos el CSV indicando que NO hay cabecera (header=None) 
+    # y bautizamos esa única columna como "genre_top"
+    df = pd.read_csv(ruta_tracks, header=None, names=["genre_top"])
     
-    # 2. Si tu archivo aún conserva la columna 'subset', filtramos por 'small'
-    if 'subset' in df.columns:
-        df = df[df['subset'] == 'small']
-        
-    # 3. Nos aseguramos de que exista 'genre_top' y quitamos los vacíos
-    if 'genre_top' in df.columns:
-        df = df[df['genre_top'].fillna("") != ""]
-        
-        data_plot = (
-            df.groupby('genre_top')
-            .size()
-            .reset_index(name="count")
-        )
-    else:
-        # Por si en tu Colab la llamaste simplemente 'genre' o 'genero'
-        raise KeyError("No se encontró la columna 'genre_top' en objetivo.csv. Revisa cómo se llama en tu archivo.")
+    # 2. Nos aseguramos de que no haya filas vacías
+    df = df[df['genre_top'].fillna("") != ""]
+    
+    # 3. Agrupamos y contamos
+    data_plot = (
+        df.groupby('genre_top')
+        .size()
+        .reset_index(name="count")
+    )
 
     return data_plot
 
