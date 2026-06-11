@@ -32,6 +32,7 @@ import tensorflow_hub as hub
 import xgboost as xgb
 
 # Uso de R desde Streamlit
+import rpy2
 import rpy2.robjects as ro
 from rpy2.robjects import pandas2ri, conversion
 from rpy2.robjects.conversion import localconverter
