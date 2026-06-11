@@ -27,9 +27,14 @@ import joblib
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
-# import tensorflow as tf
-# import tensorflow_hub as hub
+import tensorflow as tf
+import tensorflow_hub as hub
 import xgboost as xgb
+
+# Uso de R desde Streamlit
+import rpy2.robjects as ro
+from rpy2.robjects import pandas2ri, conversion
+from rpy2.robjects.conversion import localconverter
 
 # =====================================================================
 # CONFIGURACIÓN DE PÁGINA — debe ir antes de cualquier st.*
@@ -289,7 +294,7 @@ def procesar_audio_para_yamnet(uploaded_file):
     return input_final
 
 # =====================================================================
-# 3. FUNCIONES DE CARGA DE MODELOS
+# 3. FUNCIONES DE CARGA DE MODELOS Y DATOS (R + Python)
 # =====================================================================
 
 @st.cache_resource(show_spinner="📊 Cargando modelos tabulares...")
@@ -351,6 +356,101 @@ def cargar_stats_radar():
     except FileNotFoundError:
         return None
 
+def make_unique(cols):
+    """Equivalente sencillo a make.unique() de R. Si hay nombres repetidos, añade .1, .2, etc."""
+    vistos = {}
+    resultado = []
+    for col in cols:
+        col = str(col)
+        if col not in vistos:
+            vistos[col] = 0
+            resultado.append(col)
+        else:
+            vistos[col] += 1
+            resultado.append(f"{col}.{vistos[col]}")
+    return resultado
+
+@st.cache_data
+def cargar_data_plot_generos():
+    """Carga tracks.csv, filtra el subset small y cuenta canciones por género."""
+    ruta_carpeta_actual = os.path.dirname(os.path.abspath(__file__))
+    ruta_tracks = os.path.join(ruta_carpeta_actual, "fma_metadata", "tracks.csv")
+
+    col_names = pd.read_csv(ruta_tracks, skiprows=1, nrows=1, header=None)
+    nombres_sucios = col_names.iloc[0].astype(str).tolist()
+    nombres_limpios = make_unique(nombres_sucios)
+
+    df_raw = pd.read_csv(
+        ruta_tracks,
+        skiprows=2,
+        header=None,
+        names=nombres_limpios,
+        low_memory=False
+    )
+
+    data_plot = (
+        df_raw
+        .loc[(df_raw["subset"] == "small") & (df_raw["genre_top"].fillna("") != "")]
+        .groupby("genre_top")
+        .size()
+        .reset_index(name="count")
+    )
+    return data_plot
+
+def mostrar_tarta_generos_ggplot(data_plot):
+    """Pasa los datos a R y dibuja el gráfico con ggplot2."""
+    data_plot = data_plot.copy()
+    data_plot["genre_top"] = data_plot["genre_top"].astype(str)
+    data_plot["count"] = pd.to_numeric(data_plot["count"], errors="coerce")
+    data_plot = data_plot.dropna()
+
+    with localconverter(ro.default_converter + pandas2ri.converter):
+        data_plot_r = conversion.py2rpy(data_plot)
+
+    ro.globalenv["data_plot"] = data_plot_r
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+        ruta_grafico = tmp.name
+
+    ro.globalenv["ruta_grafico"] = ruta_grafico.replace("\\", "/")
+
+    ro.r("""
+    library(ggplot2)
+
+    p <- ggplot(data_plot, aes(x = "", y = count, fill = genre_top)) +
+      geom_bar(stat = "identity", width = 1, color = "white") +
+      coord_polar("y", start = 0) +
+      theme_void() +
+      labs(
+        title = "Géneros Musicales Disponibles",
+        subtitle = "¿A cuál pertenece tu canción?"
+      ) +
+      geom_text(
+        aes(x = 1.2, label = genre_top),
+        position = position_stack(vjust = 0.5),
+        color = "black",
+        fontface = "bold",
+        size = 4
+      ) +
+      scale_fill_brewer(palette = "Set3") +
+      theme(
+        legend.position = "none",
+        plot.title = element_text(face = "bold", size = 18, hjust = 0.5),
+        plot.subtitle = element_text(size = 13, hjust = 0.5)
+      )
+
+    ggsave(
+      filename = ruta_grafico,
+      plot = p,
+      width = 7,
+      height = 5,
+      dpi = 300
+    )
+    """)
+
+    st.image(ruta_grafico, use_container_width=True)
+    os.remove(ruta_grafico)
+
 # =====================================================================
 # HELPERS DE UI
 # =====================================================================
@@ -362,7 +462,6 @@ def aplicar_layout_plotly(fig, titulo=None):
         layout['title'] = dict(text=titulo, font=dict(family='Syne', size=16, color='#f0eeff'))
     fig.update_layout(**layout)
     return fig
-
 
 def tarjeta_genero(genero, confianza, color="#a855f7"):
     """Muestra una tarjeta destacada con el género predicho y la confianza."""
@@ -397,7 +496,6 @@ def tarjeta_genero(genero, confianza, color="#a855f7"):
     </div>
     """, unsafe_allow_html=True)
 
-
 def barra_nav(secciones):
     """
     Renderiza botones de navegación con indicador visual activo.
@@ -408,7 +506,6 @@ def barra_nav(secciones):
     for col, (etiqueta, key) in zip(cols, secciones):
         with col:
             es_activa = (activa == key)
-            # Marcador visual encima del botón activo
             if es_activa:
                 st.markdown(
                     f"<div style='height:3px; background:#a855f7; border-radius:2px; margin-bottom:4px;'></div>",
@@ -502,7 +599,6 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is None:
-    # Pantalla de bienvenida cuando no hay archivo
     st.markdown("""
     <div style="
         text-align: center;
@@ -521,9 +617,6 @@ if uploaded_file is None:
     st.stop()
 
 # ── Archivo cargado ──────────────────────────────────────────────────
-import tensorflow as tf
-import tensorflow_hub as hub
-
 col_audio, col_info = st.columns([2, 1])
 with col_audio:
     st.audio(uploaded_file)
@@ -690,8 +783,24 @@ elif st.session_state.seccion_activa == "tl":
         fig  = aplicar_layout_plotly(fig, "Distribución de confianza — YAMNet")
         st.plotly_chart(fig, use_container_width=True)
 
-# ── SECCIÓN D: MAPA ACÚSTICO + ADN MUSICAL ──────────────────────────
+# ── SECCIÓN D: MAPA ACÚSTICO + ADN MUSICAL + DISTRIBUCIÓN (R) ───────
 elif st.session_state.seccion_activa == "mapa":
+    
+    # ── Gráfico de Distribución (R / ggplot2) ─────────────────────────
+    st.markdown("### 🎶 Distribución de géneros en FMA Small")
+    st.caption("Gráfico generado dinámicamente mediante R y ggplot2 usando rpy2.")
+    try:
+        data_plot_generos = cargar_data_plot_generos()
+        mostrar_tarta_generos_ggplot(data_plot_generos)
+    except FileNotFoundError:
+        st.warning("⚠️ No se encontró el archivo `fma_metadata/tracks.csv`.")
+    except Exception as e:
+        st.error("❌ No se pudo generar el gráfico con ggplot2.")
+        st.code(str(e))
+        
+    st.markdown("---")
+
+    # ── Mapa Acústico (MDS) ───────────────────────────────────────────
     st.markdown("### 🗺️ Mapa Acústico (MDS)")
     st.caption("Proyección de 518 variables a 2 dimensiones. Los puntos cercanos suenan parecido.")
 
@@ -727,8 +836,9 @@ elif st.session_state.seccion_activa == "mapa":
     except FileNotFoundError:
         st.error("❌ Falta el archivo `centroides_fma.csv`. Genéralo en Colab.")
 
-    # ── Comparador ADN Musical ────────────────────────────────────────
     st.markdown("---")
+    
+    # ── Comparador ADN Musical ────────────────────────────────────────
     st.markdown("### 🧬 Comparador de ADN Musical")
     st.caption("Compara el perfil acústico de dos géneros (Echo Nest features).")
 

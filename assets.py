@@ -56,8 +56,8 @@ def entrenar_xgboost(preparar_datos_fma):
     
     X_train = preparar_datos_fma["X_train"]
     y_train = preparar_datos_fma["y_train"]
-    X_val = preparar_datos_fma["X_val"]     # Recuperamos Validación
-    y_val = preparar_datos_fma["y_val"]     # Recuperamos Validación
+    X_val = preparar_datos_fma["X_val"]
+    y_val = preparar_datos_fma["y_val"]
     
     espacio_parametros = {
         'n_estimators': [100, 200, 300],
@@ -89,7 +89,6 @@ def entrenar_xgboost(preparar_datos_fma):
     cliente = Client(processes=False) 
     
     with joblib.parallel_backend('dask'):
-        # ¡CORREGIDO! Evaluamos contra (X_val, y_val), protegiendo el set de Test
         buscador.fit(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
