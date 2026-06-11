@@ -373,29 +373,35 @@ def make_unique(cols):
 
 @st.cache_data
 def cargar_data_plot_generos():
-    """Carga tracks.csv, filtra el subset small y cuenta canciones por género."""
+    """
+    Carga el archivo personalizado objetivo.csv y cuenta las canciones por género.
+    """
+    import os
+    import pandas as pd
+    
     ruta_carpeta_actual = os.path.dirname(os.path.abspath(__file__))
     ruta_tracks = os.path.join(ruta_carpeta_actual, "objetivo.csv")
 
-    col_names = pd.read_csv(ruta_tracks, skiprows=1, nrows=1, header=None)
-    nombres_sucios = col_names.iloc[0].astype(str).tolist()
-    nombres_limpios = make_unique(nombres_sucios)
+    # 1. Cargamos el CSV como un archivo normal (sin header=[0,1])
+    df = pd.read_csv(ruta_tracks)
+    
+    # 2. Si tu archivo aún conserva la columna 'subset', filtramos por 'small'
+    if 'subset' in df.columns:
+        df = df[df['subset'] == 'small']
+        
+    # 3. Nos aseguramos de que exista 'genre_top' y quitamos los vacíos
+    if 'genre_top' in df.columns:
+        df = df[df['genre_top'].fillna("") != ""]
+        
+        data_plot = (
+            df.groupby('genre_top')
+            .size()
+            .reset_index(name="count")
+        )
+    else:
+        # Por si en tu Colab la llamaste simplemente 'genre' o 'genero'
+        raise KeyError("No se encontró la columna 'genre_top' en objetivo.csv. Revisa cómo se llama en tu archivo.")
 
-    df_raw = pd.read_csv(
-        ruta_tracks,
-        skiprows=2,
-        header=None,
-        names=nombres_limpios,
-        low_memory=False
-    )
-
-    data_plot = (
-        df_raw
-        .loc[(df_raw["subset"] == "small") & (df_raw["genre_top"].fillna("") != "")]
-        .groupby("genre_top")
-        .size()
-        .reset_index(name="count")
-    )
     return data_plot
 
 def mostrar_tarta_generos_ggplot(data_plot):
