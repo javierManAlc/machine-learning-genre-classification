@@ -375,7 +375,7 @@ def make_unique(cols):
 def cargar_data_plot_generos():
     """Carga tracks.csv, filtra el subset small y cuenta canciones por género."""
     ruta_carpeta_actual = os.path.dirname(os.path.abspath(__file__))
-    ruta_tracks = os.path.join(ruta_carpeta_actual, "fma_metadata", "tracks.csv")
+    ruta_tracks = os.path.join(ruta_carpeta_actual, "objetivo.csv")
 
     col_names = pd.read_csv(ruta_tracks, skiprows=1, nrows=1, header=None)
     nombres_sucios = col_names.iloc[0].astype(str).tolist()
