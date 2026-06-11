@@ -401,63 +401,70 @@ def cargar_data_plot_generos():
 
 def mostrar_tarta_generos_ggplot(data_plot):
     """Pasa los datos a R y dibuja el gráfico con ggplot2."""
+    import tempfile
+    import os
+    import streamlit as st
+    from rpy2.robjects import pandas2ri, default_converter, globalenv, r
+
+    # Preparación de datos normal en Pandas
     data_plot = data_plot.copy()
     data_plot["genre_top"] = data_plot["genre_top"].astype(str)
     data_plot["count"] = pd.to_numeric(data_plot["count"], errors="coerce")
     data_plot = data_plot.dropna()
 
-    # 🌟 FIX DEFINITIVO PARA RPY2 MODERNO EN STREAMLIT 🌟
-    # Usamos la conversión directa e instanciada para evitar problemas de contexto y deprecación.
-    from rpy2.robjects import pandas2ri, conversion, globalenv
+    # 🌟 FIX DEFINITIVO: Creamos el conversor y usamos .context() 🌟
+    # Esto asegura que las reglas de conversión se apliquen específicamente 
+    # al hilo actual de Streamlit, evitando el error de 'contextvars'.
+    mi_conversor = default_converter + pandas2ri.converter
 
-    # 1. Creamos un conversor combinando las reglas base con las de Pandas
-    conversor_pandas = conversion.get_conversion() + pandas2ri.converter
+    with mi_conversor.context():
+        # 1. Convertimos explícitamente dentro del contexto seguro
+        data_plot_r = pandas2ri.py2rpy(data_plot)
+        
+        # 2. Lo pasamos al entorno global de R
+        globalenv["data_plot"] = data_plot_r
 
-    # 2. Convertimos explícitamente el DataFrame usando ese conversor
-    data_plot_r = conversor_pandas.py2rpy(data_plot)
+        # 3. Preparamos la ruta temporal para la imagen
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            ruta_grafico = tmp.name
+        globalenv["ruta_grafico"] = ruta_grafico.replace("\\", "/")
 
-    # 3. Lo inyectamos en el entorno global de R
-    globalenv["data_plot"] = data_plot_r
+        # 4. Ejecutamos ggplot2
+        r("""
+        library(ggplot2)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-        ruta_grafico = tmp.name
+        p <- ggplot(data_plot, aes(x = "", y = count, fill = genre_top)) +
+          geom_bar(stat = "identity", width = 1, color = "white") +
+          coord_polar("y", start = 0) +
+          theme_void() +
+          labs(
+            title = "Géneros Musicales Disponibles",
+            subtitle = "¿A cuál pertenece tu canción?"
+          ) +
+          geom_text(
+            aes(x = 1.2, label = genre_top),
+            position = position_stack(vjust = 0.5),
+            color = "black",
+            fontface = "bold",
+            size = 4
+          ) +
+          scale_fill_brewer(palette = "Set3") +
+          theme(
+            legend.position = "none",
+            plot.title = element_text(face = "bold", size = 18, hjust = 0.5),
+            plot.subtitle = element_text(size = 13, hjust = 0.5)
+          )
 
-    globalenv["ruta_grafico"] = ruta_grafico.replace("\\", "/")
+        ggsave(
+          filename = ruta_grafico,
+          plot = p,
+          width = 7,
+          height = 5,
+          dpi = 300
+        )
+        """)
 
-    ro.r("""
-    library(ggplot2)
-
-    p <- ggplot(data_plot, aes(x = "", y = count, fill = genre_top)) +
-      geom_bar(stat = "identity", width = 1, color = "white") +
-      coord_polar("y", start = 0) +
-      theme_void() +
-      labs(
-        title = "Géneros Musicales Disponibles",
-        subtitle = "¿A cuál pertenece tu canción?"
-      ) +
-      geom_text(
-        aes(x = 1.2, label = genre_top),
-        position = position_stack(vjust = 0.5),
-        color = "black",
-        fontface = "bold",
-        size = 4
-      ) +
-      scale_fill_brewer(palette = "Set3") +
-      theme(
-        legend.position = "none",
-        plot.title = element_text(face = "bold", size = 18, hjust = 0.5),
-        plot.subtitle = element_text(size = 13, hjust = 0.5)
-      )
-
-    ggsave(
-      filename = ruta_grafico,
-      plot = p,
-      width = 7,
-      height = 5,
-      dpi = 300
-    )
-    """)
-
+    # Mostramos la imagen y limpiamos
     st.image(ruta_grafico, use_container_width=True)
     os.remove(ruta_grafico)
 
