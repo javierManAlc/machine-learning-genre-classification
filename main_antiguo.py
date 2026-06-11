@@ -406,10 +406,14 @@ def mostrar_tarta_generos_ggplot(data_plot):
     data_plot["count"] = pd.to_numeric(data_plot["count"], errors="coerce")
     data_plot = data_plot.dropna()
 
-    with localconverter(ro.default_converter + pandas2ri.converter):
-        data_plot_r = conversion.py2rpy(data_plot)
+    # 🌟 FIX PARA LOS HILOS DE STREAMLIT 🌟
+    # En lugar de usar localconverter, activamos la conversión explícitamente 
+    # para asegurarnos de que el hilo actual de Streamlit tenga el contexto.
+    from rpy2.robjects import pandas2ri
+    pandas2ri.activate()
 
-    ro.globalenv["data_plot"] = data_plot_r
+    # Al estar activado, podemos pasar el dataframe directamente al entorno de R
+    ro.globalenv["data_plot"] = data_plot
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
         ruta_grafico = tmp.name
